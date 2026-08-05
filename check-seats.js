@@ -5,6 +5,8 @@ const CONFIG = {
   FILM_CODE: '7268s2r',
   ATTR_FILTER: '70-mm',
   DAYS_AHEAD: 30,
+  VENUE_ID: 80,
+  SEATPLAN_ID: 1,
   UUID: randomUUID(),
 };
 
@@ -24,7 +26,7 @@ async function fetchScreenings() {
   const screenings = [];
 
   for (const date of dates) {
-    const url = `https://www.cinemacity.cz/cz/data-api-service/v1/quickbook/10101/film-events/in-cinema/${CONFIG.CINEMA_ID}/at-date/${date}?attr=&lang=cs_CZ`;
+    const url = `https://www.cinemacity.cz/cz/data-api-service/v1/quickbook/10101/film-events/in-cinema/${CONFIG.CINEMA_ID}/at-date/${date}?attr=&lang=cs_CZ&movieCode=${CONFIG.FILM_CODE}`;
     let data;
     try {
       const res = await fetch(url);
@@ -77,8 +79,8 @@ async function fetchAvailableSeats(presentationId) {
 
   const seats = data?.seats ?? {};
   return Object.keys(seats).map(key => {
-    const [tg, x, gridY] = key.split('_');
-    return { tg, x, gridY };
+    const [, x, gridY] = key.split('_');
+    return { x, gridY };
   });
 }
 
@@ -121,8 +123,7 @@ async function main() {
     return;
   }
 
-  // At top of main, before the screenings loop — load once:
-  const seatMap = await buildSeatMap(80, 1);
+  const seatMap = await buildSeatMap(CONFIG.VENUE_ID, CONFIG.SEATPLAN_ID);
 
   for (const s of screenings) {
     const seats = await fetchAvailableSeats(s.presentationId);
