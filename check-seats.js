@@ -57,3 +57,28 @@ async function fetchScreenings() {
     return true;
   });
 }
+
+async function fetchAvailableSeats(presentationId) {
+  const url = `https://tickets.cinemacity.cz/api/seats/seats-statusV2?presentationId=${presentationId}&venueTypeId=1&isReserved=1`;
+  let data;
+  try {
+    const res = await fetch(url, {
+      headers: { uuid: CONFIG.UUID, accept: 'application/json' },
+    });
+    if (!res.ok) {
+      console.warn(`[WARN] Seat status API ${res.status} for presentation ${presentationId}`);
+      return null;
+    }
+    data = await res.json();
+  } catch (e) {
+    console.warn(`[WARN] Seat status fetch failed for ${presentationId}: ${e.message}`);
+    return null;
+  }
+
+  const seats = data?.seats ?? {};
+  return Object.keys(seats).map(key => {
+    const [tg, x, gridY] = key.split('_');
+    return { tg, x, gridY };
+  });
+}
+
