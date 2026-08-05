@@ -82,3 +82,40 @@ async function fetchAvailableSeats(presentationId) {
   });
 }
 
+function formatDateTime(isoString) {
+  // "2026-08-24T20:30:00" → "2026-08-24 20:30"
+  return isoString.replace('T', ' ').slice(0, 16);
+}
+
+async function main() {
+  console.log(`Checking Odyssea 70mm IMAX screenings at Flora (next ${CONFIG.DAYS_AHEAD} days)...\n`);
+
+  const screenings = await fetchScreenings();
+
+  if (screenings.length === 0) {
+    console.log('No upcoming 70mm screenings found.');
+    return;
+  }
+
+  for (const s of screenings) {
+    const seats = await fetchAvailableSeats(s.presentationId);
+    const dt = formatDateTime(s.dateTime);
+    const venue = s.auditorium.padEnd(12);
+
+    if (seats === null) {
+      console.log(`${dt}  ${venue}  [error fetching seats]`);
+      continue;
+    }
+
+    if (seats.length === 0) {
+      console.log(`${dt}  ${venue}  0 free`);
+      continue;
+    }
+
+    const seatList = seats.map(s => `x${s.x}y${s.gridY}`).join(' ');
+    console.log(`${dt}  ${venue}  ${seats.length} free  [${seatList}]`);
+  }
+}
+
+main();
+
