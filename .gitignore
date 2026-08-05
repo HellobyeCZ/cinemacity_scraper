@@ -1,0 +1,14 @@
+node_modules/
+.playwright-mcp/
+.superpowers/
+docs/
+
+# other project files unrelated to this script
+attendance-*
+build-attendance-*
+feb.json
+jan.json
+mar.json
+fifa-tournament.html
+tournament-data.json
+presenter-tracker-workflow.json

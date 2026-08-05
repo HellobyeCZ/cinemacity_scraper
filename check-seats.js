@@ -1,4 +1,8 @@
 import { randomUUID } from 'crypto';
+import { ProxyAgent, setGlobalDispatcher } from 'undici';
+
+const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || 'http://s163m02i:3128';
+setGlobalDispatcher(new ProxyAgent(proxy));
 
 const CONFIG = {
   CINEMA_ID: '1052',
@@ -9,6 +13,46 @@ const CONFIG = {
   SEATPLAN_ID: 1,
   UUID: randomUUID(),
 };
+
+// ── CLI args ──────────────────────────────────────────────────────────────────
+// --rows 4,5,6   or  --rows 4-8   (comma list or inclusive range)
+// --seats 10,11,12               (seat numbers; AND-ed with --rows if both given)
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const get = flag => {
+    const i = args.indexOf(flag);
+    return i !== -1 ? args[i + 1] : null;
+  };
+
+  const parseList = val => {
+    if (!val) return null;
+    if (val.includes('-') && !val.includes(',')) {
+      const [a, b] = val.split('-').map(Number);
+      return Array.from({ length: b - a + 1 }, (_, i) => String(a + i));
+    }
+    return val.split(',').map(s => s.trim());
+  };
+
+  return {
+    rows:  parseList(get('--rows')),
+    seats: parseList(get('--seats')),
+  };
+}
+
+const FILTER = parseArgs();
+
+// ── ANSI helpers ──────────────────────────────────────────────────────────────
+const c = {
+  reset:  '\x1b[0m',
+  bold:   '\x1b[1m',
+  dim:    '\x1b[2m',
+  green:  '\x1b[32m',
+  yellow: '\x1b[33m',
+  cyan:   '\x1b[36m',
+  red:    '\x1b[31m',
+};
+const link = (text, url) => `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
+const bookingUrl = id => `https://tickets.cinemacity.cz/order/${id}?lang=cs`;
 
 function dateRange(start, days) {
   const dates = [];
@@ -89,63 +133,112 @@ function formatDateTime(isoString) {
   return isoString.replace('T', ' ').slice(0, 16);
 }
 
-async function buildSeatMap(venueId, seatplanId) {
-  const url = `https://tickets.cinemacity.cz/api/seats/seatplanV2?venueId=${venueId}&seatplanId=${seatplanId}`;
-  let data;
+async function buildSeatMap(presentationId) {
+  const url = `https://tickets.cinemacity.cz/api/presentations/${presentationId}?referralMiniSiteId=0`;
   try {
     const res = await fetch(url, {
-      method: 'POST',
-      headers: { uuid: CONFIG.UUID, accept: 'application/json', 'content-type': 'application/json' },
-      body: JSON.stringify({}),
+      headers: { uuid: CONFIG.UUID, accept: 'application/json' },
     });
-    if (!res.ok) return new Map();
-    data = await res.json();
-  } catch {
+    if (!res.ok) {
+      console.warn(`[WARN] Presentation API ${res.status} — seat labels unavailable`);
+      return new Map();
+    }
+    const data = await res.json();
+    const map = new Map();
+    for (const s of data?.presentation?.seats ?? []) {
+      map.set(`${s.x}_${s.y}`, { row: String(s.r), seat: String(s.n) });
+    }
+    return map;
+  } catch (e) {
+    console.warn(`[WARN] Seat label fetch failed: ${e.message}`);
     return new Map();
   }
-
-  const map = new Map();
-  const seats = data?.seats ?? [];
-  for (const s of seats) {
-    // s.x and s.y are grid coords; s.r is row label, s.n is seat label
-    map.set(`${s.x}_${s.y}`, { row: String(s.r), seat: String(s.n) });
-  }
-  return map;
 }
 
 async function main() {
-  console.log(`Checking Odyssea 70mm IMAX screenings at Flora (next ${CONFIG.DAYS_AHEAD} days)...\n`);
+  const filterDesc = [
+    FILTER.rows  ? `rows ${FILTER.rows.join(',')}` : null,
+    FILTER.seats ? `seats ${FILTER.seats.join(',')}` : null,
+  ].filter(Boolean).join(' + ');
+
+  const header = `Odyssea 70mm IMAX · Flora · next ${CONFIG.DAYS_AHEAD} days`
+    + (filterDesc ? `  ${c.dim}[filter: ${filterDesc}]${c.reset}` : '');
+  console.log(`\n${c.bold}${c.cyan}${header}${c.reset}`);
+  console.log(c.dim + '─'.repeat(60) + c.reset + '\n');
 
   const screenings = await fetchScreenings();
 
   if (screenings.length === 0) {
-    console.log('No upcoming 70mm screenings found.');
+    console.log(`${c.dim}No upcoming 70mm screenings found.${c.reset}`);
     return;
   }
 
-  const seatMap = await buildSeatMap(CONFIG.VENUE_ID, CONFIG.SEATPLAN_ID);
+  // Use the first screening's id to build the seat map (layout is the same for all)
+  const seatMap = await buildSeatMap(screenings[0].presentationId);
+  let anyPrinted = false;
 
   for (const s of screenings) {
     const seats = await fetchAvailableSeats(s.presentationId);
     const dt = formatDateTime(s.dateTime);
-    const venue = s.auditorium.padEnd(12);
+    const url = bookingUrl(s.presentationId);
 
     if (seats === null) {
-      console.log(`${dt}  ${venue}  [error fetching seats]`);
+      console.log(`${c.dim}${dt}${c.reset}  ${c.red}[error fetching seats]${c.reset}`);
+      anyPrinted = true;
       continue;
     }
 
-    if (seats.length === 0) {
-      console.log(`${dt}  ${venue}  0 free`);
-      continue;
-    }
-
-    const seatList = seats.map(({ x, gridY }) => {
+    // Resolve grid coords → row/seat labels (fallback to raw coords if map empty)
+    const resolved = seats.map(({ x, gridY }) => {
       const label = seatMap.get(`${x}_${gridY}`);
-      return label ? `R${label.row}:S${label.seat}` : `x${x}y${gridY}`;
-    }).join(' ');
-    console.log(`${dt}  ${venue}  ${seats.length} free  [${seatList}]`);
+      return label ?? { row: gridY, seat: `c${x}` };
+    });
+
+    // Apply filter if active
+    const filtered = (FILTER.rows || FILTER.seats)
+      ? resolved.filter(({ row, seat }) => {
+          const rowOk  = !FILTER.rows  || FILTER.rows.includes(String(row));
+          const seatOk = !FILTER.seats || FILTER.seats.includes(String(seat));
+          return rowOk && seatOk;
+        })
+      : resolved;
+
+    // With a filter active, skip screenings with nothing matching
+    if ((FILTER.rows || FILTER.seats) && filtered.length === 0) continue;
+
+    anyPrinted = true;
+    const dateStr = dt.slice(0, 10);
+    const timeStr = dt.slice(11);
+    const venue   = (s.auditorium || '').padEnd(12);
+
+    if (filtered.length === 0) {
+      console.log(`${c.dim}${dateStr} ${timeStr}  ${venue}  sold out${c.reset}`);
+      continue;
+    }
+
+    // Group seats by row, sort numerically within each row
+    const byRow = {};
+    for (const { row, seat } of filtered) {
+      (byRow[row] ??= []).push(seat);
+    }
+    const rowEntries = Object.entries(byRow)
+      .sort(([a], [b]) => Number(a) - Number(b));
+
+    const countStr = `${c.bold}${c.green}${filtered.length} seat${filtered.length !== 1 ? 's' : ''} free${c.reset}`;
+    const linkLabel = link(`${c.bold}${dateStr} ${timeStr}${c.reset}`, url);
+    console.log(`${linkLabel}  ${c.dim}${venue}${c.reset}  ${countStr}`);
+    for (const [row, seatNums] of rowEntries) {
+      const sorted = seatNums.slice().sort((a, b) => Number(a) - Number(b));
+      console.log(`  ${c.dim}row ${String(row).padStart(2)}:${c.reset}  ${c.green}${sorted.join('  ')}${c.reset}`);
+    }
+    console.log(`  ${c.dim}↳ ${url}${c.reset}`);
+    console.log();
   }
+
+  if (!anyPrinted) {
+    console.log(`${c.dim}No screenings match the current filter.${c.reset}`);
+  }
+  console.log();
 }
 
 main();
