@@ -87,6 +87,30 @@ function formatDateTime(isoString) {
   return isoString.replace('T', ' ').slice(0, 16);
 }
 
+async function buildSeatMap(venueId, seatplanId) {
+  const url = `https://tickets.cinemacity.cz/api/seats/seatplanV2?venueId=${venueId}&seatplanId=${seatplanId}`;
+  let data;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { uuid: CONFIG.UUID, accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) return new Map();
+    data = await res.json();
+  } catch {
+    return new Map();
+  }
+
+  const map = new Map();
+  const seats = data?.seats ?? [];
+  for (const s of seats) {
+    // s.x and s.y are grid coords; s.r is row label, s.n is seat label
+    map.set(`${s.x}_${s.y}`, { row: String(s.r), seat: String(s.n) });
+  }
+  return map;
+}
+
 async function main() {
   console.log(`Checking Odyssea 70mm IMAX screenings at Flora (next ${CONFIG.DAYS_AHEAD} days)...\n`);
 
@@ -96,6 +120,9 @@ async function main() {
     console.log('No upcoming 70mm screenings found.');
     return;
   }
+
+  // At top of main, before the screenings loop — load once:
+  const seatMap = await buildSeatMap(80, 1);
 
   for (const s of screenings) {
     const seats = await fetchAvailableSeats(s.presentationId);
@@ -112,7 +139,10 @@ async function main() {
       continue;
     }
 
-    const seatList = seats.map(s => `x${s.x}y${s.gridY}`).join(' ');
+    const seatList = seats.map(({ x, gridY }) => {
+      const label = seatMap.get(`${x}_${gridY}`);
+      return label ? `R${label.row}:S${label.seat}` : `x${x}y${gridY}`;
+    }).join(' ');
     console.log(`${dt}  ${venue}  ${seats.length} free  [${seatList}]`);
   }
 }
