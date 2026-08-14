@@ -1,0 +1,33 @@
+name: Check Seats
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: 'Row filter (e.g. 4-8 or 5,6,7)'
+        required: false
+        default: ''
+      seats:
+        description: 'Seat filter (e.g. 12,13,14)'
+        required: false
+        default: ''
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm install
+
+      - name: Run seat checker
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.rows }}" ]; then ARGS="$ARGS --rows ${{ inputs.rows }}"; fi
+          if [ -n "${{ inputs.seats }}" ]; then ARGS="$ARGS --seats ${{ inputs.seats }}"; fi
+          node check-seats.js $ARGS
