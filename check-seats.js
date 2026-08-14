@@ -1,8 +1,10 @@
 import { randomUUID } from 'crypto';
-import { ProxyAgent, setGlobalDispatcher } from 'undici';
 
-const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || 'http://s163m02i:3128';
-setGlobalDispatcher(new ProxyAgent(proxy));
+const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+if (proxyUrl) {
+  const { ProxyAgent, setGlobalDispatcher } = await import('undici');
+  setGlobalDispatcher(new ProxyAgent(proxyUrl));
+}
 
 const CONFIG = {
   CINEMA_ID: '1052',
